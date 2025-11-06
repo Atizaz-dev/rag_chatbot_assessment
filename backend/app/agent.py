@@ -1,12 +1,17 @@
+import os
 import asyncio
 import logging
 from agno.agent import Agent
 from agno.models.groq import Groq
 from .schemas import AgentRequest, AgentChunk
+from dotenv import load_dotenv
+
+load_dotenv()
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 logger = logging.getLogger(__name__)
-OPENAI_API_KEY="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"
-GROQ_API_KEY="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"
 
 #Agno handles conversation context internally; session history may be added later via Agno’s built-in memory.
 class AgnoAgent:
