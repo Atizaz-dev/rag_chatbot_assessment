@@ -9,3 +9,4 @@ __pycache__/
 # Optional: VSCode / PyCharm / other IDE files
 .vscode/
 .idea/
+.idea/

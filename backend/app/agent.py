@@ -1,3 +1,4 @@
+import json
 import logging
 import asyncio
 import os
@@ -116,6 +117,90 @@ class AgnoAgent:
         except Exception as e:
             logger.exception("Error streaming response: %s", e)
             yield AgentChunk(chunk=f"Error: {e}", final=True)
+
+    async def generate_thinking(self, prompt: str, context: str, history: list[dict[str, str]]) -> str:
+        """Generate a brief, user-visible rationale before streaming the final answer.
+
+        This avoids revealing chain-of-thought; instead it returns 2-4 short bullets
+        summarizing the approach based on the provided context.
+        """
+        thinking_prompt = (
+            "Provide a short rationale BEFORE answering.\n"
+            "Rules:\n"
+            "- 2 to 4 bullets\n"
+            "- Each bullet <= 18 words\n"
+            "- Do NOT include the final answer\n"
+            "- Output ONLY JSON: {\"thinking\": [\"point1\", \"point2\"]}\n\n"
+        )
+
+        if context:
+            thinking_prompt += (
+                "--- CONTEXT ---\n"
+                f"{context}\n"
+                "--- END CONTEXT ---\n\n"
+            )
+        thinking_prompt += f"QUESTION: {prompt}"
+
+        try:
+            logger.debug("generate_thinking called | history_len=%d context_chars=%d", len(history or []), len(context or ""))
+            # Explicitly request non-streaming output
+            result = self.agent.run(input=thinking_prompt, history=history, stream=False)
+
+            # Extract plain text from possible result shapes
+            text_out = None
+            # Case 1: direct string
+            if isinstance(result, str):
+                text_out = result
+            # Case 2: object with .content
+            elif hasattr(result, "content") and isinstance(getattr(result, "content"), str):
+                text_out = result.content
+            else:
+                # Case 3: iterable of events (collect .content)
+                collected = []
+                try:
+                    for ev in result:  # type: ignore[assignment]
+                        if hasattr(ev, "content") and isinstance(ev.content, str):
+                            collected.append(ev.content)
+                except TypeError:
+                    # Not iterable; fall back to stringification
+                    pass
+                if collected:
+                    text_out = "".join(collected)
+                else:
+                    # Last resort stringification
+                    text_out = str(result)
+
+            text_out = (text_out or "").strip()
+
+            # Try strict JSON first
+            try:
+                obj = json.loads(text_out)
+                thoughts = obj.get("thinking")
+                if isinstance(thoughts, list) and thoughts:
+                    bullets = [str(t).strip() for t in thoughts if str(t).strip()]
+                    bullets = bullets[:4]
+                    return "\n".join(f"- {t}" for t in bullets)
+            except Exception:
+                pass
+
+            # Fallback: pull bullet-like lines
+            lines = [ln.strip() for ln in text_out.splitlines() if ln.strip()]
+            bullet_lines = []
+            for ln in lines:
+                if ln.startswith(('-', '*')) or ln[:2].isdigit():
+                    bullet_lines.append(ln.lstrip('-* ').strip())
+                if len(bullet_lines) >= 4:
+                    break
+            if bullet_lines:
+                logger.debug("generate_thinking fallback bullets | count=%d", len(bullet_lines))
+                return "\n".join(f"- {ln[:180]}" for ln in bullet_lines)
+
+            # Final clamp if still messy
+            short = text_out.replace("\n", " ")[:300]
+            return f"- {short}" if short else "- Analyzing context and identifying relevant sections"
+        except Exception as e:
+            logger.exception("Thinking generation failed: %s", e)
+            return "- Analyzing the question and matching it to relevant document parts"
 
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
