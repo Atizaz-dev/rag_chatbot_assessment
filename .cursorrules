@@ -1,0 +1,11 @@
+rules:
+  naming:
+    function: snake_case
+    variable: snake_case
+    class: PascalCase
+  style:
+    docstring: google
+  async:
+    preferred: true
+  comments:
+    prefer_full_sentences: true
