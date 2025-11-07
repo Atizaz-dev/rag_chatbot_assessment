@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 import pytest_check as check
 from fastapi.testclient import TestClient
@@ -14,7 +16,7 @@ def load_file_bytes(path: str) -> bytes:
 
 
 def test_parse_sample_pdf(tmp_path):
-    data = load_file_bytes("tests/data/git_rules_testing.pdf")
+    data = load_file_bytes("tests/unit/data/git_rules_testing.pdf")
     text, meta, pdf_id = parse_pdf_bytes(data, "git_rules_testing.pdf")
     check.greater(len(text), 0)
     check.is_true(meta.pages >= 1)
@@ -22,7 +24,7 @@ def test_parse_sample_pdf(tmp_path):
 
 
 def test_parse_empty_pdf_raises():
-    data = load_file_bytes("tests/data/blank.pdf")
+    data = load_file_bytes("tests/unit/data/blank.pdf")
     with pytest.raises(PDFParseError):
         parse_pdf_bytes(data, "blank.pdf")
 
@@ -42,9 +44,7 @@ def test_validate_upload_rejects_nonpdf(tmp_path):
 
 
 def test_upload_endpoint_returns_400_on_empty_file(tmp_path):
-    # Create dummy empty PDF
-    dummy_file = tmp_path / "blank.pdf"
-    dummy_file.write_bytes(b"")
+    dummy_file = Path("tests/unit/data/blank.pdf")
 
     client = TestClient(app)
     with open(dummy_file, "rb") as f:
