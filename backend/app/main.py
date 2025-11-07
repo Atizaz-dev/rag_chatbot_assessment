@@ -1,76 +1,154 @@
 import asyncio
 import json
 import logging
-from typing import Dict
+import uuid
+from .schemas import AgentRequest
+from .agent import agent
+from .db.memories import get_user_memories
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 
 from .pdfs import validate_pdf_upload, parse_pdf_bytes, PDFParseError
-from .agent import agent
-from .schemas import AgentRequest
+
 
 logger = logging.getLogger("uvicorn.error")
 app = FastAPI(title="Streaming Chatbot (FastAPI + Agno + NiceGUI)")
 
-# Simple in-memory store for parsed PDFs for demo. In prod, use DB or Agno knowledge indexing.
-parsed_pdfs: Dict[str, Dict] = {}
+# This dictionary is now the definitive source of truth for PDF content.
+parsed_pdfs: dict[str, dict] = {}
+chat_histories: dict[str, list[dict[str, str]]] = {}
+
 
 @app.post("/v1/pdf/upload", status_code=201)
 async def upload_pdf(file: UploadFile = File(...)):
-    MAX_FILE_SIZE = 500 * 1024
+    MAX_FILE_SIZE = 2 * 1024 * 1024  # 2 MB
     data = await validate_pdf_upload(file)
+    logger.info("upload_pdf received | filename=%s size=%dB", file.filename, len(data))
     if len(data) == 0:
         raise HTTPException(status_code=400, detail="Empty file uploaded.")
     if len(data) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=400, detail=f"File too large. Max {MAX_FILE_SIZE // 1024} KB allowed.")
+        raise HTTPException(status_code=413, detail="File too large...")
 
     try:
         text, meta, pdf_id = parse_pdf_bytes(data, file.filename)
     except PDFParseError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    # store
-    parsed_pdfs[pdf_id] = {"metadata": meta.dict(), "text": text}
 
-    # --- Push to Agno knowledge index ---
-    try:
-        await agent.client.add_document(
-            doc_id=pdf_id,
-            text=text,
-            metadata=meta.dict()
-        )
-    except Exception as e:
-        logger.error(f"Failed to push PDF {pdf_id} to Agno index: {e}")
+    # Store the parsed PDF text in our application's memory
+    parsed_pdfs[pdf_id] = {"metadata": meta.model_dump(), "text": text}
+    logger.info(
+        "upload_pdf parsed | pdf_id=%s pages=%d text_len=%d",
+        pdf_id,
+        meta.pages,
+        len(text),
+    )
 
-    return {"pdf_id": pdf_id, "metadata": meta.dict()}
+    return {"pdf_id": pdf_id, "metadata": meta.model_dump()}
 
 
-async def _stream_generator(req: AgentRequest):
-    full_prompt = req.prompt
+async def _stream_generator(req: AgentRequest, user_id: str | None):
+    session_id = req.session_id or str(uuid.uuid4())
+    history = chat_histories.get(session_id, [])
+
+    context_parts = []
+
+    # PDFs
     if req.pdf_ids:
-        pdf_texts = [parsed_pdfs[pid]["text"] for pid in req.pdf_ids if pid in parsed_pdfs]
+        pdf_texts = [
+            parsed_pdfs[pid]["text"] for pid in req.pdf_ids if pid in parsed_pdfs
+        ]
         if pdf_texts:
-            full_prompt += "\n\nPDF CONTENT:\n" + "\n\n".join(pdf_texts)
+            context_parts.append("\n\n".join(pdf_texts))
 
-    new_req = AgentRequest(prompt=full_prompt)
+    # Memories (limit to most recent N to avoid drowning document context)
+    if user_id:
+        try:
+            RECENT_MEM_LIMIT = 15
+            mems = await get_user_memories(user_id=user_id, limit=RECENT_MEM_LIMIT)
+            if mems:
+                mem_str = "User memories (recent):\n" + "\n".join(
+                    f"- {m.memory_text}" for m in mems[-RECENT_MEM_LIMIT:]
+                )
+                context_parts.append(mem_str)
+        except Exception as e:
+            logger.exception(f"Failed reading memories for user {user_id}: {e}")
 
-    async for chunk in agent.stream_response(new_req):
-        # chunk.chunk is ALREADY a single token/character from agent.py
-        # We just need to wrap it in the SSE event format.
-        event = json.dumps({"chunk": chunk.chunk, "final": False})
+    context_str = "\n\n".join(context_parts)
+
+    logger.info(
+        "stream start | session_id=%s user_id=%s pdf_ids=%d",
+        session_id,
+        user_id,
+        len(req.pdf_ids or []),
+    )
+    # Emit a brief "thinking" rationale before the final answer
+    try:
+        thinking_text = await agent.generate_thinking(
+            prompt=req.prompt,
+            context=context_str,
+            history=history,
+        )
+        thinking_event = json.dumps(
+            {
+                "event": "thinking",
+                "thinking": thinking_text,
+                "final": False,
+                "session_id": session_id,
+            }
+        )
+        yield f"data: {thinking_event}\n\n"
+        await asyncio.sleep(0.01)
+    except Exception:
+        # Non-fatal if thinking fails
+        pass
+
+    full_response = ""
+    async for chunk in agent.stream_response(
+        prompt=req.prompt, context=context_str, history=history, user_id=user_id
+    ):
+        full_response += chunk.chunk
+        event = json.dumps(
+            {
+                "event": "answer",
+                "chunk": chunk.chunk,
+                "final": chunk.final,
+                "session_id": session_id,
+            }
+        )
         yield f"data: {event}\n\n"
-        await asyncio.sleep(0) # Keep this to allow FastAPI/uvicorn to flush the buffer
+        await asyncio.sleep(0.01)
 
-    # signal final event
-    yield f"data: {json.dumps({'chunk':'', 'final':True})}\n\n"
+    if session_id not in chat_histories:
+        chat_histories[session_id] = []
+
+    chat_histories[session_id].append({"role": "user", "content": req.prompt})
+    chat_histories[session_id].append({"role": "assistant", "content": full_response})
+    logger.info(
+        "stream end | session_id=%s response_chars=%d turns=%d",
+        session_id,
+        len(full_response),
+        len(chat_histories[session_id]),
+    )
 
 
+# endpoint
 @app.post("/v1/agent/stream")
-async def agent_stream(request: AgentRequest):
-    # Validate optional pdf ids exist
+async def agent_stream(request: AgentRequest, user_id: str | None = None):
+    logger.info(
+        "agent_stream request | user_id=%s pdf_ids=%d",
+        user_id,
+        len(request.pdf_ids or []),
+    )
     if request.pdf_ids:
         for pid in request.pdf_ids:
             if pid not in parsed_pdfs:
-                return JSONResponse(status_code=404, content={"detail": f"PDF {pid} not found"})
-    # return SSE streaming response
-    return StreamingResponse(_stream_generator(request), media_type="text/event-stream")
+                return JSONResponse(
+                    status_code=404,
+                    content={"detail": f"PDF with id '{pid}' not found."},
+                )
+
+    return StreamingResponse(
+        _stream_generator(request, user_id=user_id),
+        media_type="text/event-stream",
+    )

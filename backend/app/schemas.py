@@ -1,19 +1,22 @@
-from pydantic import BaseModel, Field
-from typing import List, Optional
+from pydantic import BaseModel
+
 
 class AgentRequest(BaseModel):
-    session_id: Optional[str] = None
+    session_id: str | None = None
     prompt: str
-    pdf_ids: Optional[List[str]] = None  # optional references to parsed PDFs
+    pdf_ids: list[str] | None = None  # optional references to parsed PDFs
+
 
 class AgentChunk(BaseModel):
     chunk: str
     final: bool = False
+    session_id: str | None = None
+
 
 class PDFMetadata(BaseModel):
     filename: str
     pages: int
-    title: Optional[str] = None
-    author: Optional[str] = None
+    title: str | None = None
+    author: str | None = None
     text_length: int = 0
     pdf_id: str

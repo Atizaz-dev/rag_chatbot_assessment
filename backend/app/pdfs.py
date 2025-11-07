@@ -2,7 +2,6 @@ import io
 import os
 import uuid
 import logging
-from typing import Tuple
 from pypdf import PdfReader
 from fastapi import UploadFile, HTTPException
 from .config import settings
@@ -13,8 +12,10 @@ logger = logging.getLogger(__name__)
 TEXT_STORAGE_DIR = "pdf_text"
 os.makedirs(TEXT_STORAGE_DIR, exist_ok=True)
 
+
 class PDFParseError(Exception):
     pass
+
 
 async def validate_pdf_upload(upload: UploadFile) -> bytes:
     data = await upload.read()
@@ -25,7 +26,11 @@ async def validate_pdf_upload(upload: UploadFile) -> bytes:
     # Basic filename check
     if not upload.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Unsupported file type (only .pdf)")
+    logger.debug(
+        "validate_pdf_upload ok | filename=%s size=%dB", upload.filename, len(data)
+    )
     return data
+
 
 def save_parsed_text_to_file(pdf_id: str, text: str) -> str:
     """Save parsed text to local directory."""
@@ -34,12 +39,14 @@ def save_parsed_text_to_file(pdf_id: str, text: str) -> str:
         f.write(text)
     return file_path
 
-def parse_pdf_bytes(data: bytes, filename: str) -> Tuple[str, PDFMetadata, str]:
+
+def parse_pdf_bytes(data: bytes, filename: str) -> tuple[str, PDFMetadata, str]:
     """
     Parse bytes into text and metadata.
     Returns (text, metadata, pdf_id)
     """
     try:
+        logger.info("parse_pdf_bytes start | filename=%s size=%dB", filename, len(data))
         buf = io.BytesIO(data)
         reader = PdfReader(buf)
         pages = len(reader.pages)
@@ -60,6 +67,12 @@ def parse_pdf_bytes(data: bytes, filename: str) -> Tuple[str, PDFMetadata, str]:
             pdf_id=pdf_id,
         )
         save_parsed_text_to_file(pdf_id, text)
+        logger.info(
+            "parse_pdf_bytes done | pdf_id=%s pages=%d text_len=%d",
+            pdf_id,
+            pages,
+            len(text),
+        )
         return text, meta, pdf_id
     except Exception as exc:
         logger.exception("PDF parsing failed")
