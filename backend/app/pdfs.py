@@ -40,6 +40,28 @@ def save_parsed_text_to_file(pdf_id: str, text: str) -> str:
     return file_path
 
 
+def cleanup_text_files(keep_pdf_id: str) -> None:
+    """Remove stale parsed-text files, keeping only the specified pdf id."""
+
+    try:
+        filenames = os.listdir(TEXT_STORAGE_DIR)
+    except FileNotFoundError:  # Directory may be missing if never used
+        return
+
+    keep_filename = f"{keep_pdf_id}.txt"
+    for name in filenames:
+        if not name.endswith(".txt"):
+            continue
+        if name == keep_filename:
+            continue
+        path = os.path.join(TEXT_STORAGE_DIR, name)
+        try:
+            os.remove(path)
+            logger.info("Removed stale parsed text file: %s", path)
+        except OSError:
+            logger.exception("Failed to delete parsed text file: %s", path)
+
+
 def parse_pdf_bytes(data: bytes, filename: str) -> tuple[str, PDFMetadata, str]:
     """
     Parse bytes into text and metadata.
@@ -68,7 +90,7 @@ def parse_pdf_bytes(data: bytes, filename: str) -> tuple[str, PDFMetadata, str]:
         )
         save_parsed_text_to_file(pdf_id, text)
         logger.info(
-            "parse_pdf_bytes done | pdf_id=%s pages=%d text_len=%d",
+            "parse_pdf_bytes done (no txt save) | pdf_id=%s pages=%d text_len=%d",
             pdf_id,
             pages,
             len(text),

@@ -44,7 +44,8 @@ async def upload_pdf_handler(e):
 
     if r.status_code == 201:
         pdf_info = r.json()
-        uploaded_pdfs.append(pdf_info["pdf_id"])  # Ensure pdf_id is added correctly
+        uploaded_pdfs.clear()
+        uploaded_pdfs.append(pdf_info["pdf_id"])  # Track only the latest document
         ui.notify(f"Uploaded: {pdf_info['pdf_id']}")
     else:
         ui.notify(f"Upload failed: {r.text}", color="negative")
