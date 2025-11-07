@@ -1,71 +1,133 @@
-## 🧠 Cursor Setup (Mandatory)
+## Agno Streaming Chatbot
 
-This project was developed using **Cursor IDE**, leveraging integrated documentation, AI-assisted refactoring, and pre-commit linting to ensure consistent, production-quality code.
+FastAPI + Agno + NiceGUI application for uploading PDFs and chatting with an agent that answers questions grounded in uploaded documents. Includes streaming responses (SSE), optional user memory storage (PostgreSQL), a NiceGUI frontend, and a full test suite.
 
-### MCP Servers / Docs Indexed
-Cursor was configured to index:
-- [Agno Documentation](https://docs.agno.com)
-- [FastAPI Documentation](https://fastapi.tiangolo.com)
-- [NiceGUI Documentation](https://nicegui.io/documentation)
+### Features
+- Upload a PDF and chat with an agent that cites context from the document
+- Robust context handling: irrelevant questions no longer pollute memory
+- “Thinking” section: brief rationale bullets before the answer
+- Async-first backend with streaming via SSE
+- Optional user memory persistence with PostgreSQL (async SQLAlchemy)
+- Modern typing throughout (e.g., `list[str]`, `str | None`)
 
-This enabled Cursor’s AI suggestions and inline documentation to provide relevant completions for async routes, response models, and UI components.
+---
 
-## 🧪 Testing
+## Quickstart
 
-This project uses **pytest** and **pytest-check** for lightweight validation of configuration, agents, and PDF parsing.
+### Requirements
+- Python 3.13+ (project tested on 3.13)
+- Node not required (NiceGUI runs on Python)
+- Optional: PostgreSQL if you enable memories
 
-### Test Coverage
-- `test_config.py` – validates environment settings and `AgnoAgent` async generator behavior.  
-- `test_pdf_parser.py` – ensures PDF parsing extracts valid text and metadata, and rejects empty or invalid uploads.  
-
-These tests ensure correctness of core abstractions without adding unnecessary complexity.
-
-To run all tests:
+### Install
 ```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -r requirements.txt
+```
+
+### Environment
+Create a `.env` in the project root (used by `pydantic-settings`):
+```env
+OPENAI_API_KEY=your_key_here
+DATABASE_URL=postgresql+asyncpg://ai:ai@localhost:5432/ai  (for memories)
+```
+
+### Run backend (FastAPI)
+```bash
+source .venv/bin/activate
+python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8001 --reload
+```
+
+### Run UI (NiceGUI)
+```bash
+source .venv/bin/activate
+python -m ui.nicegui_app
+```
+Open UI: `http://localhost:8080`
+
+---
+
+## Project Structure
+
+- `backend/app/main.py` – FastAPI app, PDF upload endpoint, streaming chat endpoint
+- `backend/app/agent.py` – Agno `Agent` wrapper with streaming and memory extraction
+- `backend/app/pdfs.py` – PDF parsing via `pypdf`, metadata, storage to `pdf_text/`
+- `backend/app/schemas.py` – Pydantic models (requests, chunks, metadata)
+- `backend/app/db/memories.py` – Async SQL for `user_memories` table (optional)
+- `backend/app/db/memory_utils.py` – Conservative memory extraction heuristics
+- `ui/nicegui_app.py` – Simple NiceGUI client: upload + chat with streaming
+- `tests/` – Unit and integration tests (httpx + pytest)
+
+---
+
+## Usage Flow
+1) Upload a PDF via UI or API
+2) Ask questions; the backend builds context from PDF text (+ recent memories)
+3) The server emits a “thinking” event with 2–4 rationale bullets
+4) Then the final answer streams token-by-token as SSE
+
+---
+
+## Testing
+
+```bash
+source .venv/bin/activate
 pytest -v
 ```
 
-### Linters and Formatters
-Pre-commit hooks were configured with:
-- **black** – automatic code formatting  
-- **ruff** – static linting and PEP8 compliance  
-- **mypy** – runtime type checking and Pydantic validation support  
+What’s covered:
+- Config and agent instantiation
+- PDF parsing success and error cases
+- End-to-end upload + stream workflow (with httpx ASGI transport)
 
-Errors and formatting feedback are surfaced directly inside Cursor via the editor’s gutter and inline popups.
+---
 
-### `.cursorrules` (if used)
-The `.cursorrules` file defined:
-- Naming conventions (`snake_case`, `PascalCase`)  
-- Async function patterns for FastAPI  
-- Docstring and comment style  
+## Cursor Configuration (IDE) – How this project was set up
 
-This ensured Cursor’s AI code completions remained consistent with project standards.
+This project was built with Cursor IDE to accelerate development with AI assistance and integrated documentation.
 
-### IDE Features & Indexing
-Cursor’s documentation indexing and inline linting provided immediate feedback on:
-- Missing type hints  
-- Misused async calls  
-- Schema validation issues  
+### MCP Servers (Docs wired into Cursor)
+- `Agno` docs – agent patterns, streaming usage
+- `FastAPI` docs – async endpoints, StreamingResponse, Pydantic v2
+- `NiceGUI` docs – UI components and async handlers
 
-The integrated doc lookup for Agno, FastAPI, and NiceGUI significantly reduced context-switching and improved development flow.
+These were added as MCP/Docs providers so inline lookups and code actions could reference the correct APIs without leaving the editor.
 
-### 🚀 Productivity Boost
-Using Cursor + linters:
-- Reduced boilerplate generation time by 50%  
-- Kept code style consistent across modules  
-- Enabled rapid iteration for streaming API and PDF parsing logic  
+### Linters/Formatters
+- `ruff` – primary linter (PEP8, static checks). Surfaced directly in-editor via gutter warnings and Problems panel
+- `black` – auto-format on save across the repo
+- `mypy` – optional static typing checks locally; helped ensure modern typing upgrades (e.g., `list[str]`, `str | None]`)
 
-This setup helped move faster, write simpler code, and maintain clear abstractions throughout the FastAPI–Agno–NiceGUI stack.
+Cursor surfaced linter errors inline and in the Problems panel, enabling quick fixes and autofixes from suggestions.
 
-## 🧱 Architecture Overview
+### .cursorrules (project conventions)
+We standardized rules (mirroring repo rules) to guide AI completions:
+- Naming: functions/variables `snake_case`, classes `PascalCase`
+- Style: Google-style docstrings; comments in full sentences
+- Async: prefer async entrypoints and non-blocking operations
 
-This project follows a clean, modular architecture to keep responsibilities well-separated and code easily maintainable:
+Purpose: keep AI-generated edits consistent with repo standards and reduce review time.
 
-- **FastAPI (`main.py`)** – Handles API routes for uploading PDFs and streaming agent responses in real time using Server-Sent Events (SSE).
-- **Agno Agent (`agent.py`)** – Provides the intelligent backend using Groq (or OpenAI) models via Agno’s agent abstraction. Also integrates document knowledge indexing.
-- **PDF Parser (`pdfs.py`)** – Validates and extracts structured text + metadata from uploaded PDFs, ensuring only supported, non-empty files are processed.
-- **Schemas (`schemas.py`)** – Defines all data models with Pydantic for strong typing, input validation, and API schema generation.
-- **UI Layer (`nicegui.py`)** – Implements a responsive NiceGUI frontend for PDF upload and real-time chat streaming with visual status indicators.
-- **Config (`config.py`)** – Centralized environment-based settings (API keys, limits, storage paths).
+### Documentation Indexing & IDE features
+- Project and dependency docs were indexed so definitions and examples were available inline
+- Inline type hints and signature help ensured consistent modern typing
 
-This modular separation ensures a clear flow: **UI → FastAPI → Agno Agent → Response Stream**, while keeping the code DRY, testable, and production-ready.
+### What actually helped us move faster and write simpler code
+- Cursor.ai helped us alot to make it streamline and saved our time
+- AI-assisted refactoring made large typing and streaming changes safe and quick
+- Combining `ruff` + `black` kept code review trivial (style diffs disappeared)
+- httpx ASGI transport in tests simplified integration testing without a live server
+
+---
+
+## Notes & Gotchas
+- Ensure `OPENAI_API_KEY` is set before running the backend
+- UI expects backend on `http://localhost:8001`; adjust `BACKEND_URL` in `ui/nicegui_app.py` if needed
+- If using DB memories, confirm PostgreSQL is reachable and the table exists
+
+---
+
+## License
+MIT
