@@ -34,3 +34,20 @@ async def add_memory(user_id: str, memory_text: str) -> Memory:
             memory_text=row.memory_text,
             inserted_at=row.inserted_at,
         )
+
+
+async def get_user_memories(user_id: str, limit: int = 50) -> list[Memory]:
+    async with AsyncSessionLocal() as session:
+        stmt = text(
+            "SELECT id, user_id, memory_text, inserted_at FROM user_memories WHERE user_id = :user_id ORDER BY inserted_at ASC LIMIT :limit"
+        )
+        res = await session.execute(stmt, {"user_id": user_id, "limit": limit})
+        rows = res.fetchall()
+        return [Memory(id=r.id, user_id=r.user_id, memory_text=r.memory_text, inserted_at=r.inserted_at) for r in rows]
+
+
+async def clear_memories(user_id: str):
+    async with AsyncSessionLocal() as session:
+        stmt = text("DELETE FROM user_memories WHERE user_id = :user_id")
+        await session.execute(stmt, {"user_id": user_id})
+        await session.commit()
